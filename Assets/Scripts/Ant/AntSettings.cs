@@ -22,6 +22,7 @@ public class AntSettings : ScriptableObject
 
     [Header("Movement Settings")] public float moveSpeed;
     public float turnSpeed;
+    public float jitterSpeed;
 
     [Header("Sensor Settings")] public float sensorAngleSpacing;
     public float sensorOffsetDst;

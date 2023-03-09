@@ -91,7 +91,7 @@ public partial class AntSimulation : MonoBehaviour
 		else
 		{
 			ComputeHelper.Dispatch(compute, settings.width, settings.height, 1, kernelIndex : colourKernel);
-			ComputeHelper.CopyRenderTexture(trailMap, displayTexture);
+			//ComputeHelper.CopyRenderTexture(trailMap, displayTexture);
 		}
 	}
 
@@ -112,6 +112,12 @@ public partial class AntSimulation : MonoBehaviour
 		
 		compute.SetFloat("moveSpeed",settings.moveSpeed);
 		compute.SetFloat("turnSpeed",settings.turnSpeed);
+		
+		compute.SetFloat("sensorAngleDegrees",settings.sensorAngleSpacing);
+		compute.SetFloat("sensorOffsetDst",settings.sensorOffsetDst);
+		compute.SetInt("sensorSize",settings.sensorSize);
+
+		compute.SetFloat("jitterSpeed", settings.jitterSpeed);
 
 
 		ComputeHelper.Dispatch(compute, settings.numAnts, 1, 1, kernelIndex: updateKernel);
