@@ -37,6 +37,7 @@ float4 wallColor;
 
 float deltaTime;
 float time;
+float seed;
 
 // Hash function www.cs.ubc.ca/~rbridson/docs/schechter-sca08-turbulence.pdf
 uint hash(uint state)
@@ -67,10 +68,10 @@ float sense(Ant ant, float sensorAngleOffset)
 
     float sum = 0;
 
-    float3 senseMask = float3(ant.state == 1,ant.state == 0,1);
-    
-    float3 senseWeight = float3(nestTrailWeight,foodTrailWeight,deathTrailWeight);
-    
+    float3 senseMask = float3(ant.state == 1, ant.state == 0, 1);
+
+    float3 senseWeight = float3(nestTrailWeight, foodTrailWeight, deathTrailWeight);
+
     for (int offsetX = -sensorSize; offsetX <= sensorSize; offsetX ++)
     {
         for (int offsetY = -sensorSize; offsetY <= sensorSize; offsetY ++)
@@ -79,20 +80,20 @@ float sense(Ant ant, float sensorAngleOffset)
             int sampleY = min(height - 1, max(0, sensorCentreY + offsetY));
 
             float3 map = TrailMap[int2(sampleX, sampleY)].xyz;
-            if(distance(float2(sampleX,sampleY),float2(1920/2 - 400,1080/2 - 400)) < 40)
+            if (distance(float2(sampleX, sampleY), float2(1920 / 2 - 400, 1080 / 2 - 400)) < 40)
             {
                 map.y = 10;
             }
-            if(distance(float2(sampleX,sampleY),float2(1920/2,1080/2)) < 100)
+            if (distance(float2(sampleX, sampleY), float2(1920 / 2, 1080 / 2)) < 100)
             {
                 map.x = 10;
             }
-    
+
             sum += dot(senseWeight * senseMask, map);
         }
     }
 
-    if(sum < 0.1)
+    if (sum < 0.1)
         sum = 0;
 
     return sum;
@@ -110,7 +111,7 @@ void Update(uint3 id : SV_DispatchThreadID)
     Ant ant = ants[id.x];
     float2 pos = ant.position;
 
-    uint random = hash(pos.y * width + pos.x + hash(id.x + time * 100000));
+    uint random = hash(pos.y * width + pos.x + hash(id.x + seed * 100000));
 
     // Steer based on sensory data
     float sensorAngleRad = sensorAngleDegrees * (3.1415 / 180);
@@ -120,9 +121,9 @@ void Update(uint3 id : SV_DispatchThreadID)
 
     float randomSteerStrength = scaleToRange01(random);
     float _turnSpeed = turnSpeed * 2 * 3.1415;
-    float leftRight = weightLeft-weightRight;
+    float leftRight = weightLeft - weightRight;
 
-    if(leftRight > 0)
+    if (leftRight > 0)
     {
         ants[id.x].angle += randomSteerStrength * _turnSpeed * deltaTime;
     }
@@ -132,38 +133,38 @@ void Update(uint3 id : SV_DispatchThreadID)
     }
 
     random = hash(random);
-    float jitterAmount = clamp(2-sense(ant,0),0,1) * jitterSpeed;
-    ants[id.x].angle += (scaleToRange01(random)-0.5) * 2 * jitterAmount * 2 * 3.1415 * deltaTime;
+    float jitterAmount = (clamp(1 - sense(ant, 0), 0, 1) + 0.5) * jitterSpeed;
+    ants[id.x].angle += (scaleToRange01(random) - 0.5) * 2 * jitterAmount * 2 * 3.1415 * deltaTime;
 
     // Update position
     float2 direction = float2(cos(ant.angle), sin(ant.angle));
     float2 newPos = ant.position + direction * deltaTime * moveSpeed;
 
-    if(distance(newPos,float2(1920/2 - 400,1080/2 - 400)) < 40)
+    if (distance(newPos, float2(1920 / 2 - 400, 1080 / 2 - 400)) < 40)
     {
         ants[id.x].state = 1;
     }
-    if(distance(newPos,float2(1920/2,1080/2)) < 100)
+    if (distance(newPos, float2(1920 / 2, 1080 / 2)) < 100)
     {
         ants[id.x].state = 0;
     }
-    
+
 
     // Clamp position to map boundaries, and pick new random move dir if hit boundary
     if (newPos.x < 0 || newPos.x >= width || newPos.y < 0 || newPos.y >= height)
     {
         random = hash(random);
-        float randomAngle = scaleToRange01(random) * 2 * 3.1415;
+        float randomAngle = scaleToRange01(random) * 2 - 1;
 
         newPos.x = min(width - 1, max(0, newPos.x));
         newPos.y = min(height - 1, max(0, newPos.y));
-        ants[id.x].angle = randomAngle;
+        ants[id.x].angle = ants[id.x].angle + 3.1415 + randomAngle;
     }
     else
     {
         int2 coord = int2(newPos);
         float4 oldTrail = TrailMap[coord];
-        TrailMap[coord] = min(1, oldTrail + float4(ant.state == 0,ant.state == 1,0,0) * trailWeight * deltaTime);
+        TrailMap[coord] = min(1, oldTrail + float4(ant.state == 0, ant.state == 1, 0, 0) * trailWeight * deltaTime);
     }
 
     ants[id.x].position = newPos;
@@ -201,7 +202,7 @@ void Diffuse(uint3 id : SV_DispatchThreadID)
     blurredCol = originalCol * (1 - diffuseWeight) + blurredCol * (diffuseWeight);
 
     //DiffusedTrailMap[id.xy] = blurredCol * saturate(1 - decayRate * deltaTime);
-    DiffusedTrailMap[id.xy] = max(0, blurredCol - float4(decayRate,decayRate * 0.1,decayRate,decayRate) * deltaTime);
+    DiffusedTrailMap[id.xy] = max(0, blurredCol - float4(decayRate, decayRate * 0.1, decayRate, decayRate) * deltaTime);
 }
 
 #pragma kernel UpdateColourMap
@@ -219,15 +220,15 @@ void UpdateColourMap(uint3 id : SV_DispatchThreadID)
 
     float4 colour = map.rbga;
 
-    if(distance(id.xy,float2(1920/2 - 400,1080/2 - 400)) < 40)
+    if (distance(id.xy, float2(1920 / 2 - 400, 1080 / 2 - 400)) < 40)
     {
-        colour = float4(1,1,1,1);
+        colour = float4(1, 1, 1, 1);
     }
-    if(distance(id.xy,float2(1920/2,1080/2)) < 100)
+    if (distance(id.xy, float2(1920 / 2, 1080 / 2)) < 100)
     {
-        colour = float4(1,0,1,1);
+        colour = float4(1, 0, 1, 1);
     }
-    
+
     // for (uint i = 0; i < numSpecies; i ++)
     // {
     //     float4 mask = float4(i == 0, i == 1, i == 2, i == 3);

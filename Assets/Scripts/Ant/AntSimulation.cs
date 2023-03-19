@@ -1,6 +1,7 @@
 ﻿using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using ComputeShaderUtility;
+using UnityEngine.Profiling;
 
 public partial class AntSimulation : MonoBehaviour
 {
@@ -24,7 +25,11 @@ public partial class AntSimulation : MonoBehaviour
 	[SerializeField, HideInInspector] protected RenderTexture displayTexture;
 	[SerializeField, HideInInspector] protected RenderTexture map;
 
+
+	public Texture2D antTexture;
+
 	ComputeBuffer antBuffer;
+	public Ant[] ants;
 
 	protected virtual void Start()
 	{
@@ -49,7 +54,7 @@ public partial class AntSimulation : MonoBehaviour
 		compute.SetTexture(colourKernel, "TrailMap", trailMap);
 
 		// Create agents with initial positions and angles
-		Ant[] ants = new Ant[settings.numAnts];
+		ants = new Ant[settings.numAnts];
 		for (int i = 0; i < ants.Length; i++)
 		{
 			Vector2 centre = new Vector2(settings.width / 2f, settings.height / 2f);
@@ -64,6 +69,7 @@ public partial class AntSimulation : MonoBehaviour
 		compute.SetInt("numAnts", settings.numAnts);
 		drawAgentsCS.SetBuffer(0, "ants", antBuffer);
 		drawAgentsCS.SetInt("numAnts", settings.numAnts);
+		drawAgentsCS.SetTexture(0,"antTexture",antTexture);
 
 
 		compute.SetInt("width", settings.width);
@@ -74,8 +80,11 @@ public partial class AntSimulation : MonoBehaviour
 	{
 		for (int i = 0; i < settings.stepsPerFrame; i++)
 		{
-			RunSimulation();
+			RunSimulation(i);
 		}
+		Profiler.BeginSample("Ants");
+		antBuffer.GetData(ants);
+		Profiler.EndSample();
 	}
 
 	void LateUpdate()
@@ -95,12 +104,13 @@ public partial class AntSimulation : MonoBehaviour
 		}
 	}
 
-	void RunSimulation()
+	void RunSimulation(int i)
 	{
 
 		// Assign settings
 		compute.SetFloat("deltaTime", Time.fixedDeltaTime);
 		compute.SetFloat("time", Time.fixedTime);
+		compute.SetFloat("seed", Random.Range(0, 1));
 
 		compute.SetFloat("trailWeight", settings.trailWeight);
 		compute.SetFloat("decayRate", settings.decayRate);
@@ -122,6 +132,7 @@ public partial class AntSimulation : MonoBehaviour
 
 		ComputeHelper.Dispatch(compute, settings.numAnts, 1, 1, kernelIndex: updateKernel);
 		ComputeHelper.Dispatch(compute, settings.width, settings.height, 1, kernelIndex: diffuseMapKernel);
+		
 
 		ComputeHelper.CopyRenderTexture(diffusedTrailMap, trailMap);
 	}
