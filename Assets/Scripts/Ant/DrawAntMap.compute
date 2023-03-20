@@ -6,6 +6,11 @@ struct Ant
     float2 position;
     float angle;
     int state;
+    int hits;
+    float lifetime;
+    float liberty_coef;
+    float markerTime;
+    float marker;
 };
 
 RWStructuredBuffer<Ant> ants;

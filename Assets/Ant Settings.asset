@@ -12,19 +12,27 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 014a0a6ff9efca44a9289fed5492ac01, type: 3}
   m_Name: Ant Settings
   m_EditorClassIdentifier: 
-  stepsPerFrame: 20
-  width: 1920
-  height: 1080
-  numAnts: 100000
-  trailWeight: 1
+  stepsPerFrame: 1
+  map: {fileID: 2800000, guid: e3766d19f97901a429b1655d2bfcb643, type: 3}
+  colonyLocation: {x: 160, y: 120}
+  colonySize: 10
+  numAnts: 10000
+  maxLifetime: 300
+  markerPeriod: 0.25
+  trailWeight: 0.1
   decayRate: 0.01
-  diffuseRate: 1
+  diffuseRate: 0.1
   nestTrailWeight: 1
   foodTrailWeight: 1
   deathTrailWeight: 1
-  moveSpeed: 30
-  turnSpeed: 10
-  jitterSpeed: 5
-  sensorAngleSpacing: 30
-  sensorOffsetDst: 20
-  sensorSize: 3
+  nestTrailColor: {r: 1, g: 0, b: 0, a: 1}
+  foodTrailColor: {r: 0, g: 1, b: 0, a: 1}
+  deathTrailColor: {r: 0, g: 0, b: 1, a: 1}
+  antColor: {r: 0, g: 0, b: 0, a: 0}
+  foodColor: {r: 0, g: 1, b: 0.50196075, a: 1}
+  wallColor: {r: 1, g: 1, b: 1, a: 1}
+  moveSpeed: 40
+  directionNoise: 0.006283186
+  sampleMaxDistance: 40
+  sampleAngleRange: 1.5707964
+  sampleCount: 32

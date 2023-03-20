@@ -1,27 +1,40 @@
 ﻿#pragma kernel Update
 
+#define TO_HOME 1
+#define TO_FOOD 0
+#define DEAD 2
+
 struct Ant
 {
     float2 position;
     float angle;
     int state;
+    int hits;
+    float lifetime;
+    float liberty_coef;
+    float markerTime;
+    float marker;
 };
 
 RWStructuredBuffer<Ant> ants;
 uint numAnts;
 
 RWTexture2D<float4> TrailMap;
+RWTexture2D<float4> FoodMap;
+
+Texture2D WallMap;
 int width;
 int height;
 
 float trailWeight;
 float moveSpeed;
-float turnSpeed;
-float jitterSpeed;
 
-float sensorAngleDegrees;
-float sensorOffsetDst;
-int sensorSize;
+float directionNoise;
+float maxLifetime;
+
+// float sensorAngleDegrees;
+// float sensorOffsetDst;
+// int sensorSize;
 
 float nestTrailWeight;
 float foodTrailWeight;
@@ -34,10 +47,24 @@ float4 antColor;
 float4 foodColor;
 float4 wallColor;
 
+float sampleMaxDistance;
+float sampleAngleRange;
+int sampleCount;
+
+int2 colonyLocation;
+float colonySize;
+
 
 float deltaTime;
 float time;
 float seed;
+
+float getAngle(float2 v)
+{
+    const float a = acos(v.x / length(v));
+    return v.y > 0.0f ? a : -a;
+}
+
 
 // Hash function www.cs.ubc.ca/~rbridson/docs/schechter-sca08-turbulence.pdf
 uint hash(uint state)
@@ -57,117 +84,236 @@ float scaleToRange01(uint state)
 }
 
 
-float sense(Ant ant, float sensorAngleOffset)
+// float sense(Ant ant, float sensorAngleOffset)
+// {
+//     float sensorAngle = ant.angle + sensorAngleOffset;
+//     float2 sensorDir = float2(cos(sensorAngle), sin(sensorAngle));
+//
+//     float2 sensorPos = ant.position + sensorDir * sensorOffsetDst;
+//     int sensorCentreX = (int)sensorPos.x;
+//     int sensorCentreY = (int)sensorPos.y;
+//
+//     float sum = 0;
+//
+//     float3 senseMask = float3(ant.state == 1, ant.state == 0, 1);
+//
+//     float3 senseWeight = float3(nestTrailWeight, foodTrailWeight, deathTrailWeight);
+//
+//     for (int offsetX = -sensorSize; offsetX <= sensorSize; offsetX ++)
+//     {
+//         for (int offsetY = -sensorSize; offsetY <= sensorSize; offsetY ++)
+//         {
+//             int sampleX = min(width - 1, max(0, sensorCentreX + offsetX));
+//             int sampleY = min(height - 1, max(0, sensorCentreY + offsetY));
+//
+//             float3 map = TrailMap[int2(sampleX, sampleY)].xyz;
+//             if (distance(float2(sampleX, sampleY), float2(1920 / 2 - 400, 1080 / 2 - 400)) < 40)
+//             {
+//                 map.y = 10;
+//             }
+//             if (distance(float2(sampleX, sampleY), float2(1920 / 2, 1080 / 2)) < 100)
+//             {
+//                 map.x = 10;
+//             }
+//
+//             sum += dot(senseWeight * senseMask, map);
+//         }
+//     }
+//
+//     if (sum < 0.1)
+//         sum = 0;
+//
+//     return sum;
+// }
+
+
+bool checkCoords(float2 cell)
 {
-    float sensorAngle = ant.angle + sensorAngleOffset;
-    float2 sensorDir = float2(cos(sensorAngle), sin(sensorAngle));
+    return cell.x >= 0 && cell.x < width && cell.y >= 0 && cell.y < height;
+}
 
-    float2 sensorPos = ant.position + sensorDir * sensorOffsetDst;
-    int sensorCentreX = (int)sensorPos.x;
-    int sensorCentreY = (int)sensorPos.y;
+struct HitPoint
+{
+    float2 cell;
+    float2 normal;
+    float distance;
+};
 
-    float sum = 0;
 
-    float3 senseMask = float3(ant.state == 1, ant.state == 0, 1);
+void terminate(int antIndex)
+{
+    ants[antIndex].lifetime = maxLifetime + 1.0f;
+}
+
+bool getFirstHit(float2 p, float2 d, float max_dist, out HitPoint intersection)
+{
+    int2 cell_p = int2(p.x, p.y);
+    const float2 step = float2(d.x < 0.0f ? -1 : 1, d.y < 0.0f ? -1 : 1);
+    const float2 inv_d = float2(1.0f / d.x, 1.0f / d.y);
+    const float t_dx = abs(inv_d.x);
+    const float t_dy = abs(inv_d.y);
+    float t_max_x = (cell_p.x + (step.x > 0) - p.x) * inv_d.x;
+    float t_max_y = (cell_p.y + (step.y > 0) - p.y) * inv_d.y;
+    float dist = 0.0f;
+    while (dist < max_dist)
+    {
+        const uint b = t_max_x < t_max_y;
+        // Advance in grid
+        dist = (b * t_max_x + (!b) * t_max_y);
+        t_max_x += t_dx * b;
+        t_max_y += t_dy * (!b);
+        cell_p.x += step.x * b;
+        cell_p.y += step.y * (!b);
+        if (!checkCoords(cell_p))
+        {
+            return false;
+        }
+        if (WallMap[cell_p].r)
+        {
+            intersection.cell = cell_p;
+            intersection.normal = float2(b, !b);
+            intersection.distance = dist;
+            return true;
+        }
+    }
+    return false;
+}
+
+void updatePosition(int antIndex)
+{
+    float2 direction = float2(cos(ants[antIndex].angle), sin(ants[antIndex].angle));
+    HitPoint hit;
+    if (getFirstHit(ants[antIndex].position, direction, deltaTime * moveSpeed, hit))
+    {
+        const int hits_threshold = 4;
+        if (ants[antIndex].hits > hits_threshold)
+        {
+            terminate(antIndex);
+        }
+        else
+        {
+            direction.x *= hit.normal.x != 0.0f ? -1.0f : 1.0f;
+            direction.y *= hit.normal.y != 0.0f ? -1.0f : 1.0f;
+        }
+        ants[antIndex].hits++;
+        ants[antIndex].angle = getAngle(direction);
+    }
+    else
+    {
+        ants[antIndex].hits = 0;
+        ants[antIndex].position += moveSpeed * deltaTime * direction;
+        if (!checkCoords(ants[antIndex].position))
+        {
+            terminate(antIndex);
+        }
+    }
+}
+
+bool isNest(int2 cell)
+{
+    if (distance(cell, colonyLocation) < colonySize)
+    {
+        return true;
+    }
+    return false;
+}
+
+
+void findMarker(int antIndex, out float random)
+{
+    float max_intensity = 0;
+    float max_angle = ants[antIndex].angle;
+    float3 senseMask = float3(ants[antIndex].state == 1, ants[antIndex].state == 0, 1);
 
     float3 senseWeight = float3(nestTrailWeight, foodTrailWeight, deathTrailWeight);
 
-    for (int offsetX = -sensorSize; offsetX <= sensorSize; offsetX ++)
+    for (int i = 0; i < sampleCount; i++)
     {
-        for (int offsetY = -sensorSize; offsetY <= sensorSize; offsetY ++)
+        random = hash(random);
+        float delta_angle = scaleToRange01(random) - 0.5f;
+        float sample_angle = delta_angle + ants[antIndex].angle;
+        random = hash(random);
+        float distance = scaleToRange01(random) * sampleMaxDistance;
+
+        float2 to_marker = float2(cos(sample_angle), sin(sample_angle));
+        int2 marker = int2(ants[antIndex].position + to_marker * distance);
+
+        HitPoint hit_point;
+        if (!checkCoords(marker) || getFirstHit(ants[antIndex].position, to_marker, distance, hit_point))
         {
-            int sampleX = min(width - 1, max(0, sensorCentreX + offsetX));
-            int sampleY = min(height - 1, max(0, sensorCentreY + offsetY));
-
-            float3 map = TrailMap[int2(sampleX, sampleY)].xyz;
-            if (distance(float2(sampleX, sampleY), float2(1920 / 2 - 400, 1080 / 2 - 400)) < 40)
-            {
-                map.y = 10;
-            }
-            if (distance(float2(sampleX, sampleY), float2(1920 / 2, 1080 / 2)) < 100)
-            {
-                map.x = 10;
-            }
-
-            sum += dot(senseWeight * senseMask, map);
+            continue;
         }
+        if ((ants[antIndex].state == TO_HOME && isNest(marker)) || (ants[antIndex].state == TO_FOOD && FoodMap[marker].r > 0))
+        {
+            max_angle = sample_angle;
+            break;
+        }
+
+        float3 map = TrailMap[marker].xyz;
+        float intensity = dot(senseWeight * senseMask, map);
+        if(intensity > max_intensity)
+        {
+            max_intensity = intensity;
+            max_angle = sample_angle;
+        }
+        random = hash(random);
+
+        if(scaleToRange01(random) < ants[antIndex].liberty_coef)
+        {
+            break;
+        }
+        
     }
 
-    if (sum < 0.1)
-        sum = 0;
-
-    return sum;
+    ants[antIndex].angle = max_angle;
 }
+
 
 [numthreads(16,1,1)]
 void Update(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x >= numAnts)
+    if (id.x >= numAnts || ants[id.x].lifetime > maxLifetime)
     {
         return;
     }
-
+    //ants[id.x].lifetime += deltaTime;
+    updatePosition(id.x);
 
     Ant ant = ants[id.x];
     float2 pos = ant.position;
 
     uint random = hash(pos.y * width + pos.x + hash(id.x + seed * 100000));
 
-    // Steer based on sensory data
-    float sensorAngleRad = sensorAngleDegrees * (3.1415 / 180);
-    float weightLeft = sense(ant, sensorAngleRad);
-    float weightRight = sense(ant, -sensorAngleRad);
-
-
-    float randomSteerStrength = scaleToRange01(random);
-    float _turnSpeed = turnSpeed * 2 * 3.1415;
-    float leftRight = weightLeft - weightRight;
-
-    if (leftRight > 0)
+    ants[id.x].marker-=deltaTime;
+    
+    if(ants[id.x].marker < 0)
     {
-        ants[id.x].angle += randomSteerStrength * _turnSpeed * deltaTime;
-    }
-    else if (leftRight < 0)
-    {
-        ants[id.x].angle -= randomSteerStrength * _turnSpeed * deltaTime;
-    }
-
-    random = hash(random);
-    float jitterAmount = (clamp(1 - sense(ant, 0), 0, 1) + 0.5) * jitterSpeed;
-    ants[id.x].angle += (scaleToRange01(random) - 0.5) * 2 * jitterAmount * 2 * 3.1415 * deltaTime;
-
-    // Update position
-    float2 direction = float2(cos(ant.angle), sin(ant.angle));
-    float2 newPos = ant.position + direction * deltaTime * moveSpeed;
-
-    if (distance(newPos, float2(1920 / 2 - 400, 1080 / 2 - 400)) < 40)
-    {
-        ants[id.x].state = 1;
-    }
-    if (distance(newPos, float2(1920 / 2, 1080 / 2)) < 100)
-    {
-        ants[id.x].state = 0;
-    }
-
-
-    // Clamp position to map boundaries, and pick new random move dir if hit boundary
-    if (newPos.x < 0 || newPos.x >= width || newPos.y < 0 || newPos.y >= height)
-    {
+        findMarker(id.x,random);
         random = hash(random);
-        float randomAngle = scaleToRange01(random) * 2 - 1;
-
-        newPos.x = min(width - 1, max(0, newPos.x));
-        newPos.y = min(height - 1, max(0, newPos.y));
-        ants[id.x].angle = ants[id.x].angle + 3.1415 + randomAngle;
+        ants[id.x].angle += (scaleToRange01(random) * 2 - 1) * directionNoise;
+        ants[id.x].marker = ants[id.x].markerTime;
     }
-    else
+
+    if (ant.state == TO_FOOD && FoodMap[int2(ant.position)].r > 0)
     {
-        int2 coord = int2(newPos);
-        float4 oldTrail = TrailMap[coord];
+        FoodMap[int2(ant.position)] = FoodMap[int2(ant.position)] - float4(0.01,0,0,0);
+        ants[id.x].state = TO_HOME;
+    }
+
+    if (ant.state == TO_HOME && isNest(int2(ant.position)))
+    {
+        ants[id.x].state = TO_FOOD;
+    }
+    
+    
+    
+    if(checkCoords(ant.position))
+    {
+        const int2 coord = int2(ants[id.x].position);
+        const float4 oldTrail = TrailMap[coord];
         TrailMap[coord] = min(1, oldTrail + float4(ant.state == 0, ant.state == 1, 0, 0) * trailWeight * deltaTime);
     }
-
-    ants[id.x].position = newPos;
+    
 }
 
 #pragma kernel Diffuse
@@ -202,7 +348,7 @@ void Diffuse(uint3 id : SV_DispatchThreadID)
     blurredCol = originalCol * (1 - diffuseWeight) + blurredCol * (diffuseWeight);
 
     //DiffusedTrailMap[id.xy] = blurredCol * saturate(1 - decayRate * deltaTime);
-    DiffusedTrailMap[id.xy] = max(0, blurredCol - float4(decayRate, decayRate * 0.1, decayRate, decayRate) * deltaTime);
+    DiffusedTrailMap[id.xy] = max(0, blurredCol - float4(decayRate, decayRate, decayRate, decayRate) * deltaTime);
 }
 
 #pragma kernel UpdateColourMap
@@ -216,15 +362,19 @@ void UpdateColourMap(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    float4 map = TrailMap[id.xy];
+    float4 trail = TrailMap[id.xy];
+    float4 food = FoodMap[id.xy];
+    float4 wall = WallMap[id.xy];
 
-    float4 colour = map.rbga;
+    float4 colour = float4(0, 0, 0, 0);
+    colour += trail.r * nestTrailColor;
+    colour += trail.g * foodTrailColor;
+    colour += trail.b * deathTrailColor;
+    colour += food.r * foodColor;
+    colour += wall.r * wallColor;
 
-    if (distance(id.xy, float2(1920 / 2 - 400, 1080 / 2 - 400)) < 40)
-    {
-        colour = float4(1, 1, 1, 1);
-    }
-    if (distance(id.xy, float2(1920 / 2, 1080 / 2)) < 100)
+    
+    if (isNest(id.xy))
     {
         colour = float4(1, 0, 1, 1);
     }

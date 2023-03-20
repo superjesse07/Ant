@@ -2,6 +2,7 @@
 using UnityEngine.Experimental.Rendering;
 using ComputeShaderUtility;
 using UnityEngine.Profiling;
+using UnityEngine.Serialization;
 
 public partial class AntSimulation : MonoBehaviour
 {
@@ -23,7 +24,7 @@ public partial class AntSimulation : MonoBehaviour
 	[SerializeField, HideInInspector] protected RenderTexture trailMap;
 	[SerializeField, HideInInspector] protected RenderTexture diffusedTrailMap;
 	[SerializeField, HideInInspector] protected RenderTexture displayTexture;
-	[SerializeField, HideInInspector] protected RenderTexture map;
+	[SerializeField, HideInInspector] protected RenderTexture foodMap;
 
 
 	public Texture2D antTexture;
@@ -44,14 +45,20 @@ public partial class AntSimulation : MonoBehaviour
 		ComputeHelper.CreateRenderTexture(ref trailMap, settings.width, settings.height, filterMode, format);
 		ComputeHelper.CreateRenderTexture(ref diffusedTrailMap, settings.width, settings.height, filterMode, format);
 		ComputeHelper.CreateRenderTexture(ref displayTexture, settings.width, settings.height, filterMode, format);
-		ComputeHelper.CreateRenderTexture(ref map, settings.width,settings.height,filterMode,format);
-
+		ComputeHelper.CreateRenderTexture(ref foodMap, settings.width,settings.height,filterMode,format);
+		ComputeHelper.CopyRenderTexture(settings.GetFoodMap(),foodMap);
+		
+		
 		// Assign textures
 		compute.SetTexture(updateKernel, "TrailMap", trailMap);
+		compute.SetTexture(updateKernel,"WallMap",settings.GetWallMap());
+		compute.SetTexture(updateKernel,"FoodMap",foodMap);
 		compute.SetTexture(diffuseMapKernel, "TrailMap", trailMap);
 		compute.SetTexture(diffuseMapKernel, "DiffusedTrailMap", diffusedTrailMap);
 		compute.SetTexture(colourKernel, "ColourMap", displayTexture);
 		compute.SetTexture(colourKernel, "TrailMap", trailMap);
+		compute.SetTexture(colourKernel,"WallMap",settings.GetWallMap());
+		compute.SetTexture(colourKernel,"FoodMap",foodMap);
 
 		// Create agents with initial positions and angles
 		ants = new Ant[settings.numAnts];
@@ -62,7 +69,7 @@ public partial class AntSimulation : MonoBehaviour
 			float randomAngle = Random.value * Mathf.PI * 2;
 			float angle = 0;
 			
-			ants[i] = new Ant() { position = startPos, angle = randomAngle, state =0 };
+			ants[i] = new Ant { position = startPos, angle = randomAngle, state =0, liberty_coef = Random.Range(0.001f,0.01f),lifetime =  0, markerTime = settings.markerPeriod * Random.Range(0.5f,1.0f)};
 		}
 
 		ComputeHelper.CreateAndSetBuffer<Ant>(ref antBuffer, ants, compute, "ants", updateKernel);
@@ -82,9 +89,7 @@ public partial class AntSimulation : MonoBehaviour
 		{
 			RunSimulation(i);
 		}
-		Profiler.BeginSample("Ants");
-		antBuffer.GetData(ants);
-		Profiler.EndSample();
+		//antBuffer.GetData(ants);
 	}
 
 	void LateUpdate()
@@ -121,13 +126,27 @@ public partial class AntSimulation : MonoBehaviour
 		compute.SetFloat("deathTrailWeight",settings.deathTrailWeight);
 		
 		compute.SetFloat("moveSpeed",settings.moveSpeed);
-		compute.SetFloat("turnSpeed",settings.turnSpeed);
-		
-		compute.SetFloat("sensorAngleDegrees",settings.sensorAngleSpacing);
-		compute.SetFloat("sensorOffsetDst",settings.sensorOffsetDst);
-		compute.SetInt("sensorSize",settings.sensorSize);
 
-		compute.SetFloat("jitterSpeed", settings.jitterSpeed);
+		//compute.SetFloat("sensorAngleDegrees",settings.sensorAngleSpacing);
+		//compute.SetFloat("sensorOffsetDst",settings.sensorOffsetDst);
+		//compute.SetInt("sensorSize",settings.sensorSize);
+		
+		compute.SetVector("nestTrailColor",settings.nestTrailColor);
+		compute.SetVector("foodTrailColor",settings.foodTrailColor);
+		compute.SetVector("deathTrailColor",settings.deathTrailColor);
+		compute.SetVector("antColor",settings.antColor);
+		compute.SetVector("foodColor",settings.foodColor);
+		compute.SetVector("wallColor",settings.wallColor);
+		
+		
+		compute.SetFloat("directionNoise", settings.directionNoise);
+		compute.SetFloat("sampleMaxDistance",settings.sampleMaxDistance);
+		compute.SetFloat("sampleAngleRange",settings.sampleAngleRange);
+		compute.SetInt("sampleCount",settings.sampleCount);
+		compute.SetFloat("maxLifetime",settings.maxLifetime);
+		compute.SetInts("colonyLocation", settings.colonyLocation.x, settings.colonyLocation.y);
+		compute.SetFloat("colonySize",settings.colonySize);
+		compute.SetFloat("markerPeriod",settings.markerPeriod);
 
 
 		ComputeHelper.Dispatch(compute, settings.numAnts, 1, 1, kernelIndex: updateKernel);
@@ -148,6 +167,11 @@ public partial class AntSimulation : MonoBehaviour
 		public Vector2 position;
 		public float angle;
 		public int state;
+		public int hits;
+		public float lifetime;
+		public float liberty_coef;
+		public float markerTime;
+		public float marker;
 	}
 
 
