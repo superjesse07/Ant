@@ -36,6 +36,11 @@ public class AntSettings : ScriptableObject
     public float maxLifetime;
 
     public float markerPeriod = 0.25f;
+    public float deathRadius;
+
+    public bool nestPheromone;
+    public bool foodPheromone;
+    public bool deathPheromone;
 
     [Header("Trail Settings")] public float trailWeight = 1;
     public float decayRate = 1;

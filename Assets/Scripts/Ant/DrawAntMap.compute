@@ -11,6 +11,7 @@ struct Ant
     float liberty_coef;
     float markerTime;
     float marker;
+    int hasFood;
 };
 
 RWStructuredBuffer<Ant> ants;

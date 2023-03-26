@@ -14,6 +14,7 @@ struct Ant
     float liberty_coef;
     float markerTime;
     float marker;
+    int hasFood;
 };
 
 RWStructuredBuffer<Ant> ants;
@@ -58,6 +59,8 @@ float colonySize;
 float deltaTime;
 float time;
 float seed;
+float deathRadius;
+int respawnAnt;
 
 float getAngle(float2 v)
 {
@@ -219,9 +222,9 @@ bool isNest(int2 cell)
 }
 
 
-void findMarker(int antIndex, out float random)
+float findMarker(int antIndex, float random)
 {
-    float max_intensity = 0;
+    float max_intensity = -1;
     float max_angle = ants[antIndex].angle;
     float3 senseMask = float3(ants[antIndex].state == 1, ants[antIndex].state == 0, 1);
 
@@ -237,7 +240,7 @@ void findMarker(int antIndex, out float random)
 
         float2 to_marker = float2(cos(sample_angle), sin(sample_angle));
         int2 marker = int2(ants[antIndex].position + to_marker * distance);
-
+       
         HitPoint hit_point;
         if (!checkCoords(marker) || getFirstHit(ants[antIndex].position, to_marker, distance, hit_point))
         {
@@ -251,7 +254,7 @@ void findMarker(int antIndex, out float random)
 
         float3 map = TrailMap[marker].xyz;
         float intensity = dot(senseWeight * senseMask, map);
-        if(intensity > max_intensity)
+        if(intensity >= max_intensity)
         {
             max_intensity = intensity;
             max_angle = sample_angle;
@@ -266,17 +269,41 @@ void findMarker(int antIndex, out float random)
     }
 
     ants[antIndex].angle = max_angle;
+    return max_intensity;
 }
 
 
 [numthreads(16,1,1)]
 void Update(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x >= numAnts || ants[id.x].lifetime > maxLifetime)
+    if (id.x >= numAnts)
     {
         return;
     }
-    //ants[id.x].lifetime += deltaTime;
+
+    if(ants[id.x].lifetime > maxLifetime)
+    {
+        if(distance(ants[id.x].position,colonyLocation) > colonySize)
+        {
+            for(int x = -deathRadius; x < deathRadius; x++)
+            {
+                for(int y= -deathRadius; y< deathRadius; y++)
+                {
+                    TrailMap[ants[id.x].position + int2(x,y)] = TrailMap[ants[id.x].position+ int2(x,y)] + float4(0,0,max(1-distance(int2(x,y),int2(0,0))/deathRadius,0),0);
+                }
+            }
+        }
+        
+        ants[id.x].position = colonyLocation;
+        if(FoodMap[colonyLocation].g > 0 && id.x == respawnAnt)
+        {
+            FoodMap[colonyLocation] = FoodMap[colonyLocation] -= float4(0,0.01,0,0);
+            ants[id.x].lifetime = 0;
+        }
+        else
+            return;
+    }
+    ants[id.x].lifetime += deltaTime;
     updatePosition(id.x);
 
     Ant ant = ants[id.x];
@@ -286,26 +313,15 @@ void Update(uint3 id : SV_DispatchThreadID)
 
     ants[id.x].marker-=deltaTime;
     
-    if(ants[id.x].marker < 0)
-    {
-        findMarker(id.x,random);
+    //if(ants[id.x].marker < 0)
+    //{
+        float randomAngle = scaleToRange01(random);
         random = hash(random);
-        ants[id.x].angle += (scaleToRange01(random) * 2 - 1) * directionNoise;
-        ants[id.x].marker = ants[id.x].markerTime;
-    }
-
-    if (ant.state == TO_FOOD && FoodMap[int2(ant.position)].r > 0)
-    {
-        FoodMap[int2(ant.position)] = FoodMap[int2(ant.position)] - float4(0.01,0,0,0);
-        ants[id.x].state = TO_HOME;
-    }
-
-    if (ant.state == TO_HOME && isNest(int2(ant.position)))
-    {
-        ants[id.x].state = TO_FOOD;
-    }
-    
-    
+        float intensity = findMarker(id.x,random);
+        float jitterAmount = (clamp(1 - intensity, 0, 1) + 0.5) * directionNoise;
+        ants[id.x].angle += (randomAngle - 0.5) * 2 * jitterAmount * 2 * 3.1415 * deltaTime;
+        //ants[id.x].marker = ants[id.x].markerTime;
+    //}
     
     if(checkCoords(ant.position))
     {
@@ -313,6 +329,27 @@ void Update(uint3 id : SV_DispatchThreadID)
         const float4 oldTrail = TrailMap[coord];
         TrailMap[coord] = min(1, oldTrail + float4(ant.state == 0, ant.state == 1, 0, 0) * trailWeight * deltaTime);
     }
+
+    if (ant.state == TO_FOOD && FoodMap[int2(ant.position)].r > 0)
+    {
+        FoodMap[int2(ant.position)] = FoodMap[int2(ant.position)] - float4(0.01,0,0,0);
+        ants[id.x].state = TO_HOME;
+        ants[id.x].lifetime = 0;
+        ants[id.x].hasFood = 1;
+    }
+
+    if (ant.state == TO_HOME && isNest(int2(ant.position)))
+    {
+        if(ants[id.x].hasFood)
+        {
+            FoodMap[colonyLocation] = FoodMap[colonyLocation] + float4(0,0.01,0,0);
+            ants[id.x].hasFood = 0;
+        }
+        ants[id.x].state = TO_FOOD;
+        ants[id.x].lifetime = 0;
+    }
+    
+    
     
 }
 
@@ -348,7 +385,7 @@ void Diffuse(uint3 id : SV_DispatchThreadID)
     blurredCol = originalCol * (1 - diffuseWeight) + blurredCol * (diffuseWeight);
 
     //DiffusedTrailMap[id.xy] = blurredCol * saturate(1 - decayRate * deltaTime);
-    DiffusedTrailMap[id.xy] = max(0, blurredCol - float4(decayRate, decayRate, decayRate, decayRate) * deltaTime);
+    DiffusedTrailMap[id.xy] = max(0, blurredCol - float4(decayRate, decayRate, decayRate * 0.001, decayRate) * deltaTime);
 }
 
 #pragma kernel UpdateColourMap
